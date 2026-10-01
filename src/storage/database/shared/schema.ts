@@ -37,7 +37,7 @@ export const students = pgTable("students", {
 // 会话表（学生与扣子会话绑定）
 export const conversations = pgTable("conversations", {
 	id: serial("id").primaryKey(),
-	student_id: integer("student_id").notNull().references(() => students.id, { onDelete: "cascade" }),
+	student_id: integer("student_id").notNull().unique().references(() => students.id, { onDelete: "cascade" }),
 	conversation_id: varchar("conversation_id", { length: 128 }).notNull(),
 	created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (table) => [

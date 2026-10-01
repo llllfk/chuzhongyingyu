@@ -43,13 +43,24 @@ export async function createConversation(studentId: number): Promise<string> {
     throw new Error("创建会话返回数据异常");
   }
 
-  // 写入数据库
+  // 写入数据库（唯一约束保证一个学生只有一个会话）
   const client = getSupabaseClient();
   const { error } = await client
     .from("conversations")
     .insert({ student_id: studentId, conversation_id: conversationId });
 
   if (error) {
+    // 如果是唯一约束冲突（并发导致），则查询已有的会话ID返回
+    if (error.code === "23505" || error.message?.includes("unique") || error.message?.includes("duplicate")) {
+      const { data: existing } = await client
+        .from("conversations")
+        .select("conversation_id")
+        .eq("student_id", studentId)
+        .maybeSingle();
+      if (existing?.conversation_id) {
+        return existing.conversation_id;
+      }
+    }
     throw new Error(`保存会话失败: ${error.message}`);
   }
 
