@@ -53,32 +53,30 @@ export async function getOrCreateConversation(
 ): Promise<string> {
   const client = getSupabaseClient();
 
-  // 先查询
+  // 第一步：先查询是否已存在的会话
   const { data, error } = await client
     .from("conversations")
     .select("conversation_id")
     .eq("student_id", studentId)
-    .maybeSingle();
+    .limit(1);
 
   if (error) {
     throw new Error(`查询会话失败: ${error.message}`);
   }
 
-  if (data?.conversation_id) {
-    return data.conversation_id;
+  if (data && data.length > 0 && data[0].conversation_id) {
+    return data[0].conversation_id;
   }
 
-  // 没有则创建扣子会话，然后 upsert 写入（原子操作，并发安全）
+  // 没有则创建扣子会话，然后 upsert 写入（冲突时不覆盖，保证一个学生只有一个会话
   const conversationId = await createCozeConversation();
 
-  const { data: upsertData, error: upsertError } = await client
+  const { error: upsertError } = await client
     .from("conversations")
     .upsert(
       { student_id: studentId, conversation_id: conversationId },
-      { onConflict: "student_id", ignoreDuplicates: false },
-    )
-    .select("conversation_id")
-    .maybeSingle();
+      { onConflict: "student_id", ignoreDuplicates: true },
+    );
 
   if (upsertError) {
     // upsert 失败则回退查询
@@ -86,14 +84,25 @@ export async function getOrCreateConversation(
       .from("conversations")
       .select("conversation_id")
       .eq("student_id", studentId)
-      .maybeSingle();
-    if (existing?.conversation_id) {
-      return existing.conversation_id;
+      .limit(1);
+    if (existing && existing.length > 0 && existing[0].conversation_id) {
+      return existing[0].conversation_id;
     }
     throw new Error(`保存会话失败: ${upsertError.message}`);
   }
 
-  return upsertData?.conversation_id || conversationId;
+  // 插入成功或被忽略（已存在），再查一次确认返回的 conversation_id
+  const { data: result } = await client
+    .from("conversations")
+    .select("conversation_id")
+    .eq("student_id", studentId)
+    .limit(1);
+
+  if (result && result.length > 0 && result[0].conversation_id) {
+    return result[0].conversation_id;
+  }
+
+  return conversationId;
 }
 
 // 获取会话历史消息
