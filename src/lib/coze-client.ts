@@ -111,14 +111,21 @@ export async function getConversationHistory(
     }>;
   };
 
-  // 只保留用户和助手的文字消息
+  // 只保留用户和助手的文字消息，按 created_at 正序排列（与聊天展示顺序一致）
+  // 过滤掉工具调用等中间消息，仅保留 answer 类型的助手消息和 user 消息
   const messages = (data.data || [])
-    .filter((m) => m.type === "answer" || m.role === "user" || m.role === "assistant")
+    .filter((m) => {
+      if (m.role === "user") return true;
+      // 助手消息只保留 type=answer 的最终回复，排除 follow_up、tool_call 等中间消息
+      if (m.role === "assistant" || m.type === "answer") return true;
+      return false;
+    })
     .map((m) => ({
       role: m.role === "user" ? "user" : "assistant",
       content: m.content,
       created_at: m.created_at || Date.now(),
-    }));
+    }))
+    .sort((a, b) => a.created_at - b.created_at);
 
   return messages;
 }

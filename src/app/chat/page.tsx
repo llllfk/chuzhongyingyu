@@ -174,6 +174,10 @@ export default function ChatPage() {
       const decoder = new TextDecoder();
       let buffer = "";
       let currentEvent = "";
+      // 记录已开始的消息id与本地气泡的映射，防止多条中间消息相互覆盖
+      const messageIdMap = new Map<string, string>();
+      // 最终的answer消息id，用于conversation.chat.completed时确认哪条是最终回复
+      let finalAnswerId = "";
 
       while (true) {
         const { done, value } = await reader.read();
@@ -201,26 +205,28 @@ export default function ChatPage() {
               const json = JSON.parse(parsed.data);
               // 扣子 v3/chat SSE 格式
               if (currentEvent === "conversation.message.delta") {
+                const msgId = json.id || json.message_id || "";
                 const content = json.content || json.delta?.content || "";
-                if (content) {
-                  setMessages((prev) =>
-                    prev.map((m) =>
-                      m.id === assistantMsg.id
-                        ? { ...m, content: m.content + content }
-                        : m,
-                    ),
-                  );
-                }
+                if (!content) continue;
+
+                // 只处理 answer 类型的消息增量（用户消息、工具消息等忽略）
+                const msgType = json.type || "answer";
+                if (msgType !== "answer") continue;
+
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === assistantMsg.id
+                      ? { ...m, content: m.content + content }
+                      : m,
+                  ),
+                );
               } else if (currentEvent === "conversation.message.completed") {
-                const content = json.content || "";
-                if (content) {
-                  setMessages((prev) =>
-                    prev.map((m) =>
-                      m.id === assistantMsg.id
-                        ? { ...m, content, isStreaming: false }
-                        : m,
-                    ),
-                  );
+                const msgType = json.type || "answer";
+                // 只保留最终的 answer 消息作为完整内容；中间工具调用等消息不覆盖流式累加结果
+                if (msgType === "answer") {
+                  finalAnswerId = json.id || json.message_id || "";
+                  // 注意：不使用 json.content 整体替换，保留流式累加的内容
+                  // 仅用于标记消息完整性（流式累加已包含完整内容）
                 }
               } else if (currentEvent === "conversation.chat.completed") {
                 setMessages((prev) =>
