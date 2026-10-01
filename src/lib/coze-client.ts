@@ -26,7 +26,8 @@ async function createCozeConversation(): Promise<string> {
       Authorization: `Bearer ${COZE_API_TOKEN}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({}),
+    // 绑定 bot_id，便于按智能体查询/复用会话
+    body: JSON.stringify(COZE_BOT_ID ? { bot_id: COZE_BOT_ID } : {}),
   });
 
   if (!response.ok) {
@@ -189,7 +190,11 @@ export async function streamChat(
     throw new Error("COZE_BOT_ID 未配置");
   }
 
-  const response = await fetch(`${COZE_API_BASE}/v3/chat`, {
+  // 扣子文档要求 conversation_id 作为 Query 参数；放在 Body 会被忽略并每次新建会话
+  const chatUrl = new URL(`${COZE_API_BASE}/v3/chat`);
+  chatUrl.searchParams.set("conversation_id", conversationId);
+
+  const response = await fetch(chatUrl.toString(), {
     method: "POST",
     headers: {
       Authorization: `Bearer ${COZE_API_TOKEN}`,
@@ -197,7 +202,6 @@ export async function streamChat(
     },
     body: JSON.stringify({
       bot_id: COZE_BOT_ID,
-      conversation_id: conversationId,
       user_id: userId,
       stream: true,
       auto_save_history: true,

@@ -69,6 +69,7 @@ export async function POST(request: NextRequest) {
       });
     }
 
+    // 一个学生固定一个 user_id（学号），配合固定 conversation_id 保证会话连续
     const stream = await streamChat(
       conversationId,
       auth.username,
