@@ -211,3 +211,79 @@ export async function uploadFileToCoze(
 
   return data.data;
 }
+
+// 获取 Bot 开场白信息（开场白文字 + 建议问题）
+export async function getBotIntro(): Promise<{
+  intro_message: string;
+  suggested_questions: string[];
+}> {
+  if (!COZE_API_TOKEN) {
+    throw new Error("COZE_API_TOKEN 未配置");
+  }
+  if (!COZE_BOT_ID) {
+    return { intro_message: "", suggested_questions: [] };
+  }
+
+  const response = await fetch(`${COZE_API_BASE}/v1/bots/${COZE_BOT_ID}`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${COZE_API_TOKEN}`,
+      "Content-Type": "application/json",
+    },
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`获取 Bot 信息失败: ${response.status} ${text}`);
+  }
+
+  const data = (await response.json()) as {
+    bot?: {
+      description?: string;
+      prompt?: string;
+      onboarding_info?: {
+        prologue?: string;
+        suggested_questions?: string[];
+      };
+    };
+    data?: {
+      description?: string;
+      prompt?: string;
+      onboarding_info?: {
+        prologue?: string;
+        suggested_questions?: string[];
+      };
+      prologue?: string;
+      suggestion_questions?: string[];
+    };
+  };
+
+  const botData = (data.bot || data.data || {}) as {
+    description?: string;
+    prompt?: string;
+    onboarding_info?: {
+      prologue?: string;
+      suggested_questions?: string[];
+    };
+    prologue?: string;
+    suggestion_questions?: string[];
+  };
+  if (!botData) {
+    return { intro_message: "", suggested_questions: [] };
+  }
+
+  // 开场白兼容多种字段名
+  const intro_message =
+    botData.onboarding_info?.prologue ||
+    botData.prologue ||
+    botData.description ||
+    "";
+
+  // 建议问题兼容多种字段名
+  const suggested_questions =
+    botData.onboarding_info?.suggested_questions ||
+    botData.suggestion_questions ||
+    [];
+
+  return { intro_message, suggested_questions };
+}

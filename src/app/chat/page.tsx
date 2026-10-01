@@ -48,6 +48,8 @@ export default function ChatPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [uploadingFiles, setUploadingFiles] = useState<UploadingFile[]>([]);
   const [configError, setConfigError] = useState("");
+  const [introMessage, setIntroMessage] = useState("");
+  const [suggestedQuestions, setSuggestedQuestions] = useState<string[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -90,9 +92,30 @@ export default function ChatPage() {
           content: m.content,
         }));
         setMessages(history);
+      } else if (res.ok || res.status === 503) {
+        // 无历史消息时加载开场白
+        loadIntro(token);
       }
     } catch (err) {
       console.error("加载历史消息失败:", err);
+    }
+  };
+
+  const loadIntro = async (token: string) => {
+    try {
+      const res = await fetch("/api/chat/intro", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.intro_message) {
+        setIntroMessage(data.intro_message);
+      }
+      if (data.suggested_questions && data.suggested_questions.length > 0) {
+        setSuggestedQuestions(data.suggested_questions);
+      }
+    } catch (err) {
+      console.error("加载开场白失败:", err);
     }
   };
 
@@ -147,6 +170,8 @@ export default function ChatPage() {
     setInput("");
     setUploadingFiles([]);
     setIsLoading(true);
+    setIntroMessage("");
+    setSuggestedQuestions([]);
 
     try {
       const response = await fetch("/api/chat/send", {
@@ -440,16 +465,48 @@ export default function ChatPage() {
       <ScrollArea className="flex-1" ref={scrollRef}>
         <div className="max-w-3xl mx-auto px-4 py-4 space-y-4">
           {messages.length === 0 && (
-            <div className="text-center py-16">
+            <div className="text-center py-8">
               <div className="w-16 h-16 mx-auto mb-4 rounded-2xl bg-gradient-to-br from-teal-100 to-blue-100 flex items-center justify-center">
                 <Sparkles className="w-8 h-8 text-teal-500" />
               </div>
-              <h2 className="text-lg font-medium text-slate-700 mb-2">
-                欢迎使用 AI 学习助手
-              </h2>
-              <p className="text-sm text-slate-400 max-w-xs mx-auto">
-                有任何学习问题都可以问我，我会尽力帮助你
-              </p>
+              {introMessage ? (
+                <div className="max-w-md mx-auto">
+                  <h2 className="text-lg font-medium text-slate-700 mb-3">
+                    AI 学习助手
+                  </h2>
+                  <div className="bg-white border border-slate-200 rounded-2xl px-4 py-3 text-sm text-slate-600 leading-relaxed text-left shadow-sm">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {introMessage}
+                    </ReactMarkdown>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <h2 className="text-lg font-medium text-slate-700 mb-2">
+                    欢迎使用 AI 学习助手
+                  </h2>
+                  <p className="text-sm text-slate-400 max-w-xs mx-auto">
+                    有任何学习问题都可以问我，我会尽力帮助你
+                  </p>
+                </>
+              )}
+              {suggestedQuestions.length > 0 && (
+                <div className="mt-6 space-y-2 max-w-md mx-auto">
+                  <p className="text-xs text-slate-400 mb-3">你可以问：</p>
+                  {suggestedQuestions.map((q, i) => (
+                    <button
+                      key={i}
+                      onClick={() => {
+                        setInput(q);
+                      }}
+                      className="w-full text-left px-4 py-2.5 text-sm text-slate-600 bg-white border border-slate-200 rounded-xl hover:border-teal-300 hover:bg-teal-50/50 transition-colors"
+                    >
+                      <span className="text-teal-500 mr-2">💬</span>
+                      {q}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
