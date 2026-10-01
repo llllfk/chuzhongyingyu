@@ -1,3 +1,5 @@
+# AGENTS.md
+
 # 项目上下文
 
 ### 版本技术栈
@@ -7,59 +9,109 @@
 - **Language**: TypeScript 5
 - **UI 组件**: shadcn/ui (基于 Radix UI)
 - **Styling**: Tailwind CSS 4
+- **数据库**: PostgreSQL (Supabase)
+- **认证**: JWT + bcryptjs
 
 ## 目录结构
 
 ```
-├── public/                 # 静态资源
-├── scripts/                # 构建与启动脚本
-│   ├── build.sh            # 构建脚本
-│   ├── dev.sh              # 开发环境启动脚本
-│   ├── prepare.sh          # 预处理脚本
-│   └── start.sh            # 生产环境启动脚本
+├── public/                          # 静态资源
+├── scripts/                         # 构建与启动脚本
 ├── src/
-│   ├── app/                # 页面路由与布局
-│   ├── components/ui/      # Shadcn UI 组件库
-│   ├── hooks/              # 自定义 Hooks
-│   ├── lib/                # 工具库
-│   │   └── utils.ts        # 通用工具函数 (cn)
-│   └── server.ts           # 自定义服务端入口
-├── next.config.ts          # Next.js 配置
-├── package.json            # 项目依赖管理
-└── tsconfig.json           # TypeScript 配置
+│   ├── app/                         # 页面路由与 API
+│   │   ├── api/                     # API Routes
+│   │   │   ├── auth/login/          # 登录接口
+│   │   │   ├── auth/change-password/# 修改密码
+│   │   │   ├── students/            # 学生管理 CRUD
+│   │   │   ├── chat/send/           # 流式对话（SSE）
+│   │   │   ├── chat/history/        # 历史消息
+│   │   │   └── chat/upload/         # 文件上传
+│   │   ├── login/                   # 登录页
+│   │   ├── change-password/         # 修改密码页
+│   │   ├── teacher/                 # 教师后台
+│   │   ├── chat/                    # 学生聊天页
+│   │   ├── layout.tsx               # 根布局（含 AuthProvider）
+│   │   └── page.tsx                 # 首页（重定向）
+│   ├── components/
+│   │   ├── ui/                      # shadcn/ui 组件
+│   │   └── auth-provider.tsx        # 认证 Context
+│   ├── hooks/                       # 自定义 Hooks
+│   ├── lib/
+│   │   ├── auth.ts                  # JWT + bcrypt 工具
+│   │   ├── middleware-auth.ts       # API 鉴权中间件函数
+│   │   ├── coze-client.ts           # 扣子 API 代理
+│   │   ├── seed.ts                  # 默认教师账号 seed
+│   │   └── utils.ts                 # 通用工具函数
+│   ├── storage/database/
+│   │   ├── supabase-client.ts       # Supabase 客户端
+│   │   └── shared/schema.ts         # Drizzle schema
+│   ├── instrumentation.ts           # Next.js 启动钩子（seed）
+│   └── server.ts                    # 自定义服务端入口
+├── next.config.ts                   # Next.js 配置
+├── package.json                     # 项目依赖
+├── tsconfig.json                    # TypeScript 配置
+├── DESIGN.md                        # 设计规范
+└── AGENTS.md                        # 本文件
 ```
-
-- 项目文件（如 app 目录、pages 目录、components 等）默认初始化到 `src/` 目录下。
 
 ## 包管理规范
 
-**仅允许使用 pnpm** 作为包管理器，**严禁使用 npm 或 yarn**。
-**常用命令**：
-- 安装依赖：`pnpm add <package>`
-- 安装开发依赖：`pnpm add -D <package>`
-- 安装所有依赖：`pnpm install`
-- 移除依赖：`pnpm remove <package>`
+**仅允许使用 pnpm**，**严禁使用 npm 或 yarn**。
+
+## 核心功能点
+
+### 认证系统
+- 统一登录页，账号+密码
+- 服务端识别角色（教师/学生），返回 JWT
+- 教师默认账号 admin / Admin@2026，首次登录强制改密
+- bcrypt 密码哈希，JWT 有效期 7 天
+- API 鉴权：Authorization: Bearer {token}
+- 教师专属接口校验 role=teacher
+
+### 数据库表
+- **teachers**: 教师表（id, username, password_hash, must_change_password）
+- **students**: 学生表（id, student_no, name, group_name, password_hash, is_active 软删）
+- **conversations**: 会话绑定表（student_id 唯一外键, conversation_id 扣子会话ID）
+
+### 教师后台
+- 学生列表（按学号/姓名搜索、分页）
+- 新增、编辑、删除（软删）学生
+- 重置学生密码
+- 显示每个学生会话状态（是否已开始对话）
+
+### 学生聊天
+- 聊天气泡 UI，Markdown 渲染
+- SSE 流式输出 + 打字中动画
+- 附件上传（图片/文档/视频），实时进度
+- 历史消息持久化（从扣子会话拉取）
+- 合规角标不可省略
+- 顶部显示学生姓名 + 退出按钮
+
+### 扣子 API 代理
+- 凭证从环境变量读取：COZE_API_TOKEN, COZE_BOT_ID
+- 学生首次对话创建会话，绑定 student_id 终身复用
+- v3/chat 流式透传 SSE
+- v1/files 代理上传，消息用 object_string 格式发送
+- v1/conversations/{id}/messages 拉取历史
+- 配置缺失时中文友好提示
 
 ## 开发规范
 
 ### 编码规范
+- TypeScript strict 模式
+- 禁止隐式 any、禁止 as any
+- 数据库字段名 snake_case
+- 所有 Supabase 调用检查 error 并 throw
 
-- 默认按 TypeScript `strict` 心智写代码；优先复用当前作用域已声明的变量、函数、类型和导入，禁止引用未声明标识符或拼错变量名。
-- 禁止隐式 `any` 和 `as any`；函数参数、返回值、解构项、事件对象、`catch` 错误在使用前应有明确类型或先完成类型收窄，并清理未使用的变量和导入。
+### 安全
+- 扣子凭证只存在服务端，严禁前端访问
+- 密码 bcrypt 哈希存储
+- 接口按角色鉴权
+- 软删学生 is_active=false 后无法登录
 
-### next.config 配置规范
+## 构建与启动
 
-- 配置的路径不要写死绝对路径，必须使用 path.resolve(__dirname, ...)、import.meta.dirname 或 process.cwd() 动态拼接。
-
-### Hydration 问题防范
-
-1. 严禁在 JSX 渲染逻辑中直接使用 typeof window、Date.now()、Math.random() 等动态数据。**必须使用 'use client' 并配合 useEffect + useState 确保动态内容仅在客户端挂载后渲染**；同时严禁非法 HTML 嵌套（如 <p> 嵌套 <div>）。
-2. **禁止使用 head 标签**，优先使用 metadata，详见文档：https://nextjs.org/docs/app/api-reference/functions/generate-metadata
-   1. 三方 CSS、字体等资源可在 `globals.css` 中顶部通过 `@import` 引入或使用 next/font
-   2. preload, preconnect, dns-prefetch 通过 ReactDOM 的 preload、preconnect、dns-prefetch 方法引入
-   3. json-ld 可阅读 https://nextjs.org/docs/app/guides/json-ld
-
-## UI 设计与组件规范 (UI & Styling Standards)
-
-- 模板默认预装核心组件库 `shadcn/ui`，位于`src/components/ui/`目录下
-- Next.js 项目**必须默认**采用 shadcn/ui 组件、风格和规范，**除非用户指定用其他的组件和规范。**
+- 开发：`pnpm run dev`（端口由 DEPLOY_RUN_PORT 决定）
+- 构建：`pnpm run build`
+- 生产启动：`pnpm run start`
+- 数据库同步：`coze-coding-ai db upgrade`
