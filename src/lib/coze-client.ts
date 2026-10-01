@@ -2,8 +2,8 @@ import 'server-only';
 import { getSupabaseClient } from "@/storage/database/supabase-client";
 
 const COZE_API_BASE = process.env.COZE_API_BASE_URL || "https://api.coze.cn";
-const COZE_API_TOKEN = process.env.COZE_API_TOKEN || "";
-const COZE_BOT_ID = process.env.COZE_BOT_ID || "";
+const COZE_API_TOKEN = process.env.BOT_TOKEN || "";
+const COZE_BOT_ID = process.env.BOT_ID || "";
 
 export function isCozeConfigured(): boolean {
   return !!COZE_API_TOKEN && !!COZE_BOT_ID;
