@@ -5,6 +5,7 @@ import {
   streamChat,
   isCozeConfigured,
 } from "@/lib/coze-client";
+import { getAttachmentKind, type AttachmentKind } from "@/lib/chat-media";
 
 // POST /api/chat/send - 发送消息，流式返回
 export async function POST(request: NextRequest) {
@@ -22,7 +23,12 @@ export async function POST(request: NextRequest) {
   try {
     const { content, attachments } = (await request.json()) as {
       content?: string;
-      attachments?: Array<{ file_id: string; file_name: string }>;
+      attachments?: Array<{
+        file_id: string;
+        file_name: string;
+        kind?: AttachmentKind;
+        mime_type?: string;
+      }>;
     };
 
     if (!content && (!attachments || attachments.length === 0)) {
@@ -38,12 +44,14 @@ export async function POST(request: NextRequest) {
     const additionalMessages: Array<Record<string, unknown>> = [];
 
     if (attachments && attachments.length > 0) {
-      // 有附件时使用 object_string 数组格式
+      // 有附件时使用 object_string：图片用 image，其余用 file（含视频）
       const contentArray: Array<{ type: string; [key: string]: unknown }> = [];
 
       attachments.forEach((att) => {
+        const kind =
+          att.kind || getAttachmentKind(att.file_name, att.mime_type);
         contentArray.push({
-          type: "file",
+          type: kind === "image" ? "image" : "file",
           file_id: att.file_id,
           file_name: att.file_name,
         });
@@ -53,6 +61,12 @@ export async function POST(request: NextRequest) {
         contentArray.push({
           type: "text",
           text: content,
+        });
+      } else {
+        // 纯图片/文件消息需伴随一条 text，否则扣子可能报 4000
+        contentArray.push({
+          type: "text",
+          text: "请查看我发送的附件",
         });
       }
 

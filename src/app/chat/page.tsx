@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/components/auth-provider";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Send,
   LogOut,
@@ -23,12 +22,17 @@ import {
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Toaster, toast } from "sonner";
+import {
+  getAttachmentKind,
+  type AttachmentKind,
+  type ParsedAttachment,
+} from "@/lib/chat-media";
 
 interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
-  attachments?: Array<{ file_id: string; file_name: string; file_size: number }>;
+  attachments?: ParsedAttachment[];
   isStreaming?: boolean;
 }
 
@@ -38,6 +42,8 @@ interface UploadingFile {
   progress: number;
   file_id?: string;
   error?: string;
+  preview_url: string;
+  kind: AttachmentKind;
 }
 
 export default function ChatPage() {
@@ -54,9 +60,11 @@ export default function ChatPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // 滚动到底部
+  // 仅滚动消息区到底部，不影响固定输入框
   const scrollToBottom = useCallback(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
   }, []);
 
   useEffect(() => {
@@ -87,11 +95,24 @@ export default function ChatPage() {
         return;
       }
       if (res.ok && data.data && data.data.length > 0) {
-        const history: ChatMessage[] = data.data.map((m: { role: string; content: string }, i: number) => ({
-          id: `hist-${i}`,
-          role: m.role === "user" ? "user" : "assistant",
-          content: m.content,
-        }));
+        const history: ChatMessage[] = data.data.map(
+          (
+            m: {
+              role: string;
+              content: string;
+              attachments?: ParsedAttachment[];
+            },
+            i: number,
+          ) => ({
+            id: `hist-${i}`,
+            role: m.role === "user" ? "user" : "assistant",
+            content: m.content || "",
+            attachments:
+              m.attachments && m.attachments.length > 0
+                ? m.attachments
+                : undefined,
+          }),
+        );
         setMessages(history);
       }
     } catch (err) {
@@ -141,14 +162,15 @@ export default function ChatPage() {
       return;
     }
 
-    // 构造用户消息
-    const userAttachments = uploadingFiles
-      .filter((f) => f.file_id)
-      .map((f) => ({
-        file_id: f.file_id!,
-        file_name: f.file.name,
-        file_size: f.file.size,
-      }));
+    // 构造用户消息（本轮用本地 blob 预览图/视频）
+    const readyFiles = uploadingFiles.filter((f) => f.file_id);
+    const userAttachments: ParsedAttachment[] = readyFiles.map((f) => ({
+      file_id: f.file_id!,
+      file_name: f.file.name,
+      file_size: f.file.size,
+      kind: f.kind,
+      preview_url: f.preview_url,
+    }));
 
     const userMsg: ChatMessage = {
       id: `user-${Date.now()}`,
@@ -166,6 +188,7 @@ export default function ChatPage() {
 
     setMessages((prev) => [...prev, userMsg, assistantMsg]);
     setInput("");
+    // 预览 URL 已挂到消息上，勿 revoke；清空上传列表即可
     setUploadingFiles([]);
     setIsLoading(true);
     setIntroMessage("");
@@ -180,7 +203,11 @@ export default function ChatPage() {
         },
         body: JSON.stringify({
           content: text,
-          attachments: userAttachments,
+          attachments: userAttachments.map((att) => ({
+            file_id: att.file_id,
+            file_name: att.file_name,
+            kind: att.kind,
+          })),
         }),
       });
 
@@ -312,11 +339,15 @@ export default function ChatPage() {
       const tempId = `up-${Date.now()}-${Math.random()
         .toString(36)
         .slice(2, 8)}`;
+      const kind = getAttachmentKind(file.name, file.type);
+      const preview_url = URL.createObjectURL(file);
 
       const uploading: UploadingFile = {
         id: tempId,
         file,
         progress: 0,
+        preview_url,
+        kind,
       };
 
       setUploadingFiles((prev) => [...prev, uploading]);
@@ -393,19 +424,19 @@ export default function ChatPage() {
   };
 
   const removeUploadingFile = (id: string) => {
-    setUploadingFiles((prev) => prev.filter((f) => f.id !== id));
+    setUploadingFiles((prev) => {
+      const target = prev.find((f) => f.id === id);
+      if (target?.preview_url) {
+        URL.revokeObjectURL(target.preview_url);
+      }
+      return prev.filter((f) => f.id !== id);
+    });
   };
 
-  const getFileIcon = (type: string) => {
-    if (type.startsWith("image/")) return <ImageIcon className="w-4 h-4" />;
-    if (type.startsWith("video/")) return <Film className="w-4 h-4" />;
+  const getFileIcon = (kind: AttachmentKind) => {
+    if (kind === "image") return <ImageIcon className="w-4 h-4" />;
+    if (kind === "video") return <Film className="w-4 h-4" />;
     return <FileText className="w-4 h-4" />;
-  };
-
-  const formatFileSize = (bytes: number) => {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
   if (authLoading || !user) {
@@ -417,11 +448,11 @@ export default function ChatPage() {
   }
 
   return (
-    <div className="flex flex-col h-screen bg-slate-50">
+    <div className="flex flex-col h-dvh overflow-hidden bg-slate-50">
       <Toaster />
 
       {/* 顶部栏 */}
-      <header className="bg-white border-b border-slate-200 flex-shrink-0">
+      <header className="bg-white border-b border-slate-200 shrink-0">
         <div className="max-w-3xl mx-auto px-4 h-14 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-teal-400 to-blue-500 flex items-center justify-center">
@@ -442,15 +473,15 @@ export default function ChatPage() {
       </header>
 
       {/* 合规角标 */}
-      <div className="bg-slate-50 border-b border-slate-100 text-center py-1.5 flex-shrink-0">
+      <div className="bg-slate-50 border-b border-slate-100 text-center py-1.5 shrink-0">
         <p className="text-xs text-slate-400">内容由AI生成，仅供参考</p>
       </div>
 
       {/* 配置错误提示 */}
       {configError && (
-        <div className="bg-amber-50 border-b border-amber-100 px-4 py-3 flex-shrink-0">
+        <div className="bg-amber-50 border-b border-amber-100 px-4 py-3 shrink-0">
           <div className="max-w-3xl mx-auto flex items-start gap-2">
-            <AlertCircle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
+            <AlertCircle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
             <div>
               <p className="text-sm font-medium text-amber-800">系统暂不可用</p>
               <p className="text-sm text-amber-600">{configError}</p>
@@ -459,8 +490,11 @@ export default function ChatPage() {
         </div>
       )}
 
-      {/* 聊天内容区 */}
-      <ScrollArea className="flex-1" ref={scrollRef}>
+      {/* 聊天内容区：独立滚动，不顶开底部输入框 */}
+      <div
+        ref={scrollRef}
+        className="flex-1 min-h-0 overflow-y-auto overscroll-contain"
+      >
         <div className="max-w-3xl mx-auto px-4 py-4 space-y-4">
           {messages.length === 0 && (
             <div className="text-center py-8">
@@ -520,7 +554,7 @@ export default function ChatPage() {
               >
                 {/* 头像 */}
                 <div
-                  className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
+                  className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
                     msg.role === "user"
                       ? "bg-gradient-to-br from-teal-400 to-blue-500"
                       : "bg-slate-200"
@@ -541,22 +575,68 @@ export default function ChatPage() {
                       : "bg-white border border-slate-200 text-slate-700 rounded-tl-sm shadow-sm"
                   }`}
                 >
-                  {/* 附件列表 */}
+                  {/* 附件列表：图片/视频预览，其他显示文件名 */}
                   {msg.attachments && msg.attachments.length > 0 && (
                     <div className="space-y-2 mb-2">
-                      {msg.attachments.map((att) => (
-                        <div
-                          key={att.file_id}
-                          className={`flex items-center gap-2 text-xs px-2 py-1.5 rounded-lg ${
-                            msg.role === "user"
-                              ? "bg-white/20"
-                              : "bg-slate-50 border border-slate-100"
-                          }`}
-                        >
-                          <FileText className="w-3.5 h-3.5 flex-shrink-0" />
-                          <span className="truncate">{att.file_name}</span>
-                        </div>
-                      ))}
+                      {msg.attachments.map((att, idx) => {
+                        const key = att.file_id || `${att.file_name}-${idx}`;
+                        if (att.kind === "image" && att.preview_url) {
+                          return (
+                            <a
+                              key={key}
+                              href={att.preview_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="block overflow-hidden rounded-xl"
+                            >
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={att.preview_url}
+                                alt={att.file_name}
+                                className="max-h-56 max-w-full object-contain rounded-xl bg-black/5"
+                              />
+                            </a>
+                          );
+                        }
+                        if (att.kind === "image") {
+                          return (
+                            <div
+                              key={key}
+                              className={`flex items-center gap-2 text-xs px-2 py-1.5 rounded-lg ${
+                                msg.role === "user"
+                                  ? "bg-white/20"
+                                  : "bg-slate-50 border border-slate-100"
+                              }`}
+                            >
+                              <ImageIcon className="w-3.5 h-3.5 shrink-0" />
+                              <span className="truncate">{att.file_name}</span>
+                            </div>
+                          );
+                        }
+                        if (att.kind === "video" && att.preview_url) {
+                          return (
+                            <video
+                              key={key}
+                              src={att.preview_url}
+                              controls
+                              className="max-h-56 max-w-full rounded-xl bg-black/80"
+                            />
+                          );
+                        }
+                        return (
+                          <div
+                            key={key}
+                            className={`flex items-center gap-2 text-xs px-2 py-1.5 rounded-lg ${
+                              msg.role === "user"
+                                ? "bg-white/20"
+                                : "bg-slate-50 border border-slate-100"
+                            }`}
+                          >
+                            {getFileIcon(att.kind)}
+                            <span className="truncate">{att.file_name}</span>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
 
@@ -588,89 +668,105 @@ export default function ChatPage() {
 
           <div ref={messagesEndRef} />
         </div>
-      </ScrollArea>
+      </div>
 
-      {/* 上传中文件列表 */}
-      {uploadingFiles.length > 0 && (
-        <div className="bg-white border-t border-slate-100 px-4 py-2 flex-shrink-0">
-          <div className="max-w-3xl mx-auto flex flex-wrap gap-2">
-            {uploadingFiles.map((f) => (
-              <div
-                key={f.id}
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs border ${
-                  f.error
-                    ? "bg-red-50 border-red-200 text-red-600"
-                    : "bg-slate-50 border-slate-200 text-slate-600"
-                }`}
-              >
-                {getFileIcon(f.file.type)}
-                <span className="max-w-32 truncate">{f.file.name}</span>
-                {!f.error && (
-                  <span className="text-slate-400">
-                    {f.progress}%
-                  </span>
-                )}
-                {f.error && <span className="text-red-500">失败</span>}
-                <button
-                  onClick={() => removeUploadingFile(f.id)}
-                  className="ml-1 hover:bg-black/5 rounded p-0.5"
+      {/* 底部固定：上传列表 + 输入框 */}
+      <div className="shrink-0 bg-white border-t border-slate-200">
+        {uploadingFiles.length > 0 && (
+          <div className="px-4 py-2 border-b border-slate-100">
+            <div className="max-w-3xl mx-auto flex flex-wrap gap-2">
+              {uploadingFiles.map((f) => (
+                <div
+                  key={f.id}
+                  className={`flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs border ${
+                    f.error
+                      ? "bg-red-50 border-red-200 text-red-600"
+                      : "bg-slate-50 border-slate-200 text-slate-600"
+                  }`}
                 >
-                  <X className="w-3 h-3" />
-                </button>
-              </div>
-            ))}
+                  {f.kind === "image" ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={f.preview_url}
+                      alt={f.file.name}
+                      className="w-10 h-10 rounded object-cover"
+                    />
+                  ) : f.kind === "video" ? (
+                    <video
+                      src={f.preview_url}
+                      className="w-10 h-10 rounded object-cover"
+                      muted
+                    />
+                  ) : (
+                    getFileIcon(f.kind)
+                  )}
+                  <span className="max-w-32 truncate">{f.file.name}</span>
+                  {!f.error && (
+                    <span className="text-slate-400">
+                      {f.progress}%
+                    </span>
+                  )}
+                  {f.error && <span className="text-red-500">失败</span>}
+                  <button
+                    onClick={() => removeUploadingFile(f.id)}
+                    className="ml-1 hover:bg-black/5 rounded p-0.5"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* 输入框 */}
-      <div className="bg-white border-t border-slate-200 p-3 flex-shrink-0">
-        <div className="max-w-3xl mx-auto">
-          <div className="flex items-end gap-2 bg-slate-50 border border-slate-200 rounded-2xl p-2 focus-within:border-teal-300 focus-within:ring-2 focus-within:ring-teal-100 transition-all">
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              accept="image/*,video/*,.pdf,.doc,.docx,.txt,.xlsx,.xls,.ppt,.pptx"
-              className="hidden"
-              onChange={handleFileSelect}
-            />
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="rounded-xl text-slate-500 hover:text-teal-600 hover:bg-teal-50 flex-shrink-0"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={isLoading}
-              title="上传附件"
-            >
-              <Paperclip className="w-5 h-5" />
-            </Button>
-            <Input
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="输入消息..."
-              className="border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0 py-2 text-sm resize-none"
-              disabled={isLoading || !!configError}
-            />
-            <Button
-              type="button"
-              size="icon"
-              className="rounded-xl bg-gradient-to-br from-teal-500 to-blue-500 hover:from-teal-600 hover:to-blue-600 flex-shrink-0 text-white shadow-md"
-              onClick={handleSend}
-              disabled={isLoading || (!input.trim() && uploadingFiles.every((f) => !f.file_id)) || !!configError}
-            >
-              {isLoading ? (
-                <Loader2 className="w-5 h-5 animate-spin" />
-              ) : (
-                <Send className="w-5 h-5" />
-              )}
-            </Button>
+        <div className="p-3">
+          <div className="max-w-3xl mx-auto">
+            <div className="flex items-end gap-2 bg-slate-50 border border-slate-200 rounded-2xl p-2 focus-within:border-teal-300 focus-within:ring-2 focus-within:ring-teal-100 transition-all">
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept="image/*,video/*,.pdf,.doc,.docx,.txt,.xlsx,.xls,.ppt,.pptx"
+                className="hidden"
+                onChange={handleFileSelect}
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="rounded-xl text-slate-500 hover:text-teal-600 hover:bg-teal-50 shrink-0"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isLoading}
+                title="上传附件"
+              >
+                <Paperclip className="w-5 h-5" />
+              </Button>
+              <Input
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="输入消息..."
+                className="border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0 py-2 text-sm resize-none"
+                disabled={isLoading || !!configError}
+              />
+              <Button
+                type="button"
+                size="icon"
+                className="rounded-xl bg-gradient-to-br from-teal-500 to-blue-500 hover:from-teal-600 hover:to-blue-600 shrink-0 text-white shadow-md"
+                onClick={handleSend}
+                disabled={isLoading || (!input.trim() && uploadingFiles.every((f) => !f.file_id)) || !!configError}
+              >
+                {isLoading ? (
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                ) : (
+                  <Send className="w-5 h-5" />
+                )}
+              </Button>
+            </div>
+            <p className="text-center text-xs text-slate-400 mt-2">
+              支持图片、文档、视频等附件
+            </p>
           </div>
-          <p className="text-center text-xs text-slate-400 mt-2">
-            支持图片、文档、视频等附件
-          </p>
         </div>
       </div>
     </div>

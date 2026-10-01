@@ -1,5 +1,9 @@
 import 'server-only';
 import { getSupabaseClient } from "@/storage/database/supabase-client";
+import {
+  parseMessageContent,
+  type ParsedAttachment,
+} from "@/lib/chat-media";
 
 const COZE_API_BASE = process.env.COZE_API_BASE_URL || "https://api.coze.cn";
 const COZE_API_TOKEN = process.env.BOT_TOKEN || "";
@@ -121,10 +125,17 @@ export async function getOrCreateConversation(
   return finalId;
 }
 
-// 获取会话历史消息
+// 获取会话历史消息（解析多模态 object_string，拆出文本与附件）
 export async function getConversationHistory(
   conversationId: string,
-): Promise<Array<{ role: string; content: string; created_at: number }>> {
+): Promise<
+  Array<{
+    role: string;
+    content: string;
+    created_at: number;
+    attachments: ParsedAttachment[];
+  }>
+> {
   if (!COZE_API_TOKEN) {
     throw new Error("COZE_API_TOKEN 未配置");
   }
@@ -149,25 +160,28 @@ export async function getConversationHistory(
     data?: Array<{
       role: string;
       content: string;
+      content_type?: string;
       type?: string;
       created_at?: number;
     }>;
   };
 
-  // 只保留用户和助手的文字消息，按 created_at 正序排列（与聊天展示顺序一致）
-  // 过滤掉工具调用等中间消息，仅保留 answer 类型的助手消息和 user 消息
+  // 只保留用户和助手的最终消息，按 created_at 正序
   const messages = (data.data || [])
     .filter((m) => {
       if (m.role === "user") return true;
-      // 助手消息只保留 type=answer 的最终回复，排除 follow_up、tool_call 等中间消息
-      if (m.role === "assistant" || m.type === "answer") return true;
+      if (m.type === "answer") return true;
       return false;
     })
-    .map((m) => ({
-      role: m.role === "user" ? "user" : "assistant",
-      content: m.content,
-      created_at: m.created_at || Date.now(),
-    }))
+    .map((m) => {
+      const parsed = parseMessageContent(m.content || "", m.content_type);
+      return {
+        role: m.role === "user" ? "user" : "assistant",
+        content: parsed.text,
+        attachments: parsed.attachments,
+        created_at: m.created_at || Date.now(),
+      };
+    })
     .sort((a, b) => a.created_at - b.created_at);
 
   return messages;
@@ -248,14 +262,26 @@ export async function uploadFileToCoze(
   }
 
   const data = (await response.json()) as {
-    data?: { id: string; name: string; size: number; url?: string };
+    data?: {
+      id: string;
+      name?: string;
+      file_name?: string;
+      size?: number;
+      bytes?: number;
+      url?: string;
+    };
   };
 
-  if (!data.data) {
+  if (!data.data?.id) {
     throw new Error("上传文件返回数据异常");
   }
 
-  return data.data;
+  return {
+    id: data.data.id,
+    name: data.data.file_name || data.data.name || file.name,
+    size: data.data.bytes ?? data.data.size ?? file.size,
+    url: data.data.url,
+  };
 }
 
 // 获取 Bot 开场白信息（开场白文字 + 建议问题）
