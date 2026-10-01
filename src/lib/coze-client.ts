@@ -47,17 +47,27 @@ async function createCozeConversation(): Promise<string> {
   return conversationId;
 }
 
+// 内存缓存：同一进程内避免重复查询数据库，作为会话唯一性的二级保证
+const conversationCache = new Map<number, string>();
+
 // 获取学生的会话ID，没有则创建（保证一个学生只有一个会话，并发安全）
 export async function getOrCreateConversation(
-  studentId: number,
+  studentId: number | string,
 ): Promise<string> {
+  const sid = Number(studentId);
+  if (isNaN(sid)) throw new Error(`无效的学生ID: ${studentId}`);
+
+  // 先查内存缓存
+  const cached = conversationCache.get(sid);
+  if (cached) return cached;
+
   const client = getSupabaseClient();
 
-  // 第一步：先查询是否已存在的会话
+  // 第一步：先查询数据库是否已存在会话
   const { data, error } = await client
     .from("conversations")
     .select("conversation_id")
-    .eq("student_id", studentId)
+    .eq("student_id", sid)
     .limit(1);
 
   if (error) {
@@ -65,16 +75,18 @@ export async function getOrCreateConversation(
   }
 
   if (data && data.length > 0 && data[0].conversation_id) {
+    conversationCache.set(sid, data[0].conversation_id);
     return data[0].conversation_id;
   }
 
-  // 没有则创建扣子会话，然后 upsert 写入（冲突时不覆盖，保证一个学生只有一个会话
+  // 没有则创建扣子会话
   const conversationId = await createCozeConversation();
 
+  // upsert 写入（冲突时不覆盖，保证一个学生只有一个会话）
   const { error: upsertError } = await client
     .from("conversations")
     .upsert(
-      { student_id: studentId, conversation_id: conversationId },
+      { student_id: sid, conversation_id: conversationId },
       { onConflict: "student_id", ignoreDuplicates: true },
     );
 
@@ -83,26 +95,29 @@ export async function getOrCreateConversation(
     const { data: existing } = await client
       .from("conversations")
       .select("conversation_id")
-      .eq("student_id", studentId)
+      .eq("student_id", sid)
       .limit(1);
     if (existing && existing.length > 0 && existing[0].conversation_id) {
+      conversationCache.set(sid, existing[0].conversation_id);
       return existing[0].conversation_id;
     }
     throw new Error(`保存会话失败: ${upsertError.message}`);
   }
 
-  // 插入成功或被忽略（已存在），再查一次确认返回的 conversation_id
+  // 再查一次确认最终值（ignoreDuplicates 时 upsert 不返回数据）
   const { data: result } = await client
     .from("conversations")
     .select("conversation_id")
-    .eq("student_id", studentId)
+    .eq("student_id", sid)
     .limit(1);
 
-  if (result && result.length > 0 && result[0].conversation_id) {
-    return result[0].conversation_id;
-  }
+  const finalId =
+    result && result.length > 0 && result[0].conversation_id
+      ? result[0].conversation_id
+      : conversationId;
 
-  return conversationId;
+  conversationCache.set(sid, finalId);
+  return finalId;
 }
 
 // 获取会话历史消息
