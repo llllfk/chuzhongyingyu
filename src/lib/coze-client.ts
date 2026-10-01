@@ -14,9 +14,10 @@ export function getBotId(): string {
 }
 
 // 创建扣子会话
-export async function createConversation(studentId: number): Promise<string> {
+// 调用扣子 API 创建一个新会话
+async function createCozeConversation(): Promise<string> {
   if (!COZE_API_TOKEN) {
-    throw new Error("COZE_API_TOKEN 未配置");
+    throw new Error("BOT_TOKEN 未配置");
   }
 
   const response = await fetch(`${COZE_API_BASE}/v1/conversation/create`, {
@@ -43,35 +44,16 @@ export async function createConversation(studentId: number): Promise<string> {
     throw new Error("创建会话返回数据异常");
   }
 
-  // 写入数据库（唯一约束保证一个学生只有一个会话）
-  const client = getSupabaseClient();
-  const { error } = await client
-    .from("conversations")
-    .insert({ student_id: studentId, conversation_id: conversationId });
-
-  if (error) {
-    // 如果是唯一约束冲突（并发导致），则查询已有的会话ID返回
-    if (error.code === "23505" || error.message?.includes("unique") || error.message?.includes("duplicate")) {
-      const { data: existing } = await client
-        .from("conversations")
-        .select("conversation_id")
-        .eq("student_id", studentId)
-        .maybeSingle();
-      if (existing?.conversation_id) {
-        return existing.conversation_id;
-      }
-    }
-    throw new Error(`保存会话失败: ${error.message}`);
-  }
-
   return conversationId;
 }
 
-// 获取学生的会话ID，没有则创建
+// 获取学生的会话ID，没有则创建（保证一个学生只有一个会话，并发安全）
 export async function getOrCreateConversation(
   studentId: number,
 ): Promise<string> {
   const client = getSupabaseClient();
+
+  // 先查询
   const { data, error } = await client
     .from("conversations")
     .select("conversation_id")
@@ -82,11 +64,36 @@ export async function getOrCreateConversation(
     throw new Error(`查询会话失败: ${error.message}`);
   }
 
-  if (data) {
+  if (data?.conversation_id) {
     return data.conversation_id;
   }
 
-  return createConversation(studentId);
+  // 没有则创建扣子会话，然后 upsert 写入（原子操作，并发安全）
+  const conversationId = await createCozeConversation();
+
+  const { data: upsertData, error: upsertError } = await client
+    .from("conversations")
+    .upsert(
+      { student_id: studentId, conversation_id: conversationId },
+      { onConflict: "student_id", ignoreDuplicates: false },
+    )
+    .select("conversation_id")
+    .maybeSingle();
+
+  if (upsertError) {
+    // upsert 失败则回退查询
+    const { data: existing } = await client
+      .from("conversations")
+      .select("conversation_id")
+      .eq("student_id", studentId)
+      .maybeSingle();
+    if (existing?.conversation_id) {
+      return existing.conversation_id;
+    }
+    throw new Error(`保存会话失败: ${upsertError.message}`);
+  }
+
+  return upsertData?.conversation_id || conversationId;
 }
 
 // 获取会话历史消息
