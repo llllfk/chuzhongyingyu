@@ -63,19 +63,20 @@ export default function ChatPage() {
     scrollToBottom();
   }, [messages, scrollToBottom]);
 
-  // 鉴权 & 加载历史消息
+  // 鉴权 & 加载历史消息 & 加载开场白
   useEffect(() => {
     if (authLoading) return;
     if (!user || user.role !== "student") {
       router.replace("/login");
       return;
     }
-    loadHistory();
-  }, [user, authLoading, router]);
-
-  const loadHistory = async () => {
     const token = localStorage.getItem("edu_ai_token");
     if (!token) return;
+    loadHistory(token);
+    loadIntro(token);
+  }, [user, authLoading, router]);
+
+  const loadHistory = async (token: string) => {
     try {
       const res = await fetch("/api/chat/history", {
         headers: { Authorization: `Bearer ${token}` },
@@ -92,9 +93,6 @@ export default function ChatPage() {
           content: m.content,
         }));
         setMessages(history);
-      } else if (res.ok || res.status === 503) {
-        // 无历史消息时加载开场白
-        loadIntro(token);
       }
     } catch (err) {
       console.error("加载历史消息失败:", err);
